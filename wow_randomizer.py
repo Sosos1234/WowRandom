@@ -16,8 +16,15 @@ import time
 from collections import defaultdict
 from typing import Dict, Iterable, List, Sequence, Tuple, TypeVar
 
-import pymysql
-import yaml
+try:
+    import pymysql
+except ModuleNotFoundError:  # pragma: no cover - runtime guard
+    pymysql = None
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - runtime guard
+    yaml = None
 
 
 META_TABLE = "wr_randomizer_meta"
@@ -59,6 +66,20 @@ class AppConfig:
     database: DatabaseConfig
     modules: ModulesConfig
     randomizer: RandomizerConfig
+
+
+def ensure_dependencies() -> None:
+    missing = []
+    if pymysql is None:
+        missing.append("PyMySQL")
+    if yaml is None:
+        missing.append("PyYAML")
+    if missing:
+        deps = ", ".join(missing)
+        raise RuntimeError(
+            f"Missing dependencies: {deps}. "
+            "Install with: pip install -r requirements.txt"
+        )
 
 
 def parse_config(path: str) -> AppConfig:
@@ -681,6 +702,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    try:
+        ensure_dependencies()
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
     args = parse_args()
     config = parse_config(args.config)
     db = DB(config.database)
