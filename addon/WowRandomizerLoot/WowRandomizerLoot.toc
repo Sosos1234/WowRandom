@@ -1,0 +1,8 @@
+## Interface: 30300
+## Title: WowRandomizerLoot
+## Notes: Shows randomized loot from current world DB export.
+## Author: WowRandomizer
+## Version: 1.0.0
+
+WowRandomizerLootData.lua
+WowRandomizerLoot.lua
