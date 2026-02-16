@@ -1,0 +1,19 @@
+database:
+  host: 127.0.0.1
+  port: 3306
+  user: acore
+  password: "change_me"
+  database: acore_world
+  charset: utf8mb4
+
+modules:
+  creatures: true
+  creature_stats: true
+  loot: true
+  quests: true
+  item_stats: true
+
+randomizer:
+  # Number of rows per bulk update chunk.
+  # Lower value = safer for weak DB servers, higher = faster.
+  chunk_size: 1000
