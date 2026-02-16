@@ -373,6 +373,66 @@ class WorldRandomizer:
         )
         return statements
 
+    def _reinsert_with_mapped_key_statements(
+        self,
+        table_name: str,
+        key_column: str,
+        all_columns: Sequence[str],
+        mapping: dict[int, int],
+        temp_prefix: str,
+    ) -> list[str]:
+        if not all_columns:
+            return []
+
+        map_table = f"tmp_{temp_prefix}_map"
+        snapshot_table = f"tmp_{temp_prefix}_snapshot"
+        insert_columns = ", ".join(quote_ident(column) for column in all_columns)
+        select_columns: list[str] = []
+        for column in all_columns:
+            if column.lower() == key_column.lower():
+                select_columns.append(
+                    f"COALESCE(`m`.`dst`, {aliased('s', column)}) AS {quote_ident(column)}"
+                )
+            else:
+                select_columns.append(aliased("s", column))
+
+        statements = [
+            f"DROP TEMPORARY TABLE IF EXISTS {quote_ident(map_table)};",
+            (
+                f"CREATE TEMPORARY TABLE {quote_ident(map_table)} ("
+                "`src` INT UNSIGNED PRIMARY KEY, "
+                "`dst` INT UNSIGNED NOT NULL"
+                ") ENGINE=MEMORY;"
+            ),
+        ]
+        sorted_pairs = sorted(mapping.items())
+        for batch in chunks(sorted_pairs, 1000):
+            values = ", ".join(f"({src}, {dst})" for src, dst in batch)
+            statements.append(
+                f"INSERT INTO {quote_ident(map_table)} (`src`, `dst`) VALUES {values};"
+            )
+
+        statements.extend(
+            [
+                f"DROP TEMPORARY TABLE IF EXISTS {quote_ident(snapshot_table)};",
+                (
+                    f"CREATE TEMPORARY TABLE {quote_ident(snapshot_table)} AS "
+                    f"SELECT {insert_columns} FROM {quote_ident(table_name)};"
+                ),
+                f"DELETE FROM {quote_ident(table_name)};",
+                (
+                    f"INSERT INTO {quote_ident(table_name)} ({insert_columns}) "
+                    f"SELECT {', '.join(select_columns)} "
+                    f"FROM {quote_ident(snapshot_table)} AS `s` "
+                    f"LEFT JOIN {quote_ident(map_table)} AS `m` "
+                    f"ON {aliased('s', key_column)} = `m`.`src`;"
+                ),
+                f"DROP TEMPORARY TABLE IF EXISTS {quote_ident(map_table)};",
+                f"DROP TEMPORARY TABLE IF EXISTS {quote_ident(snapshot_table)};",
+            ]
+        )
+        return statements
+
     def randomize_mobs(self, plan: RandomizationPlan) -> None:
         table_name = "creature"
         columns = self.table_columns(table_name)
@@ -413,7 +473,15 @@ class WorldRandomizer:
             return
 
         mapping = self._build_mapping(values)
-        plan.add_sql_many(self._case_update_statements(table_name, entry_column, mapping))
+        plan.add_sql_many(
+            self._reinsert_with_mapped_key_statements(
+                table_name=table_name,
+                key_column=entry_column,
+                all_columns=columns,
+                mapping=mapping,
+                temp_prefix="creature_loot",
+            )
+        )
         plan.mark_tables([table_name])
         plan.add_summary(f"Loot: shuffled {len(mapping)} creature loot entries.")
 
