@@ -8,6 +8,7 @@ It can shuffle:
 - creature loot entries (`creature_loot_template`)
 - weapon stats (`item_template`, `class = 2`)
 - quest rewards/objectives (`quest_template`)
+- random stat rolls for item stats (`item_template`, `stat_value1..10`)
 
 The script is seed-based, so each seed corresponds to one generated world.
 Use a new seed at any time to "reroll" the world.
@@ -61,6 +62,17 @@ Enable backup before apply:
 python3 wow_randomizer.py --apply --backup-before-apply
 ```
 
+Random stat rolls for item stats (example: from -50% to +100% of original):
+
+```bash
+python3 wow_randomizer.py \
+  --apply \
+  --no-mobs --no-loot --no-weapons --no-quests \
+  --item-stat-rolls \
+  --item-stat-roll-min 0.5 \
+  --item-stat-roll-max 2.0
+```
+
 ## Category toggles
 
 By default all categories are enabled. You can disable any:
@@ -74,6 +86,7 @@ Available toggles:
 - `--loot` / `--no-loot`
 - `--weapons` / `--no-weapons`
 - `--quests` / `--no-quests`
+- `--item-stat-rolls` / `--no-item-stat-rolls`
 
 ## Environment variables (optional)
 

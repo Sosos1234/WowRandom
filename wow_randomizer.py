@@ -42,6 +42,9 @@ for index in range(1, 11):
     ITEM_STAT_FIELDS.append(f"stat_type{index}")
     ITEM_STAT_FIELDS.append(f"stat_value{index}")
 
+ITEM_TYPE_FIELDS = [f"stat_type{index}" for index in range(1, 11)]
+ITEM_VALUE_FIELDS = [f"stat_value{index}" for index in range(1, 11)]
+
 
 QUEST_FIELDS = []
 for index in range(1, 7):
@@ -315,6 +318,27 @@ class WorldRandomizer:
             updates.append(statement)
         return updates
 
+    def _case_update_by_key_statements(
+        self,
+        table_name: str,
+        key_column: str,
+        target_column: str,
+        entry_value_mapping: dict[int, int],
+    ) -> list[str]:
+        updates: list[str] = []
+        sorted_pairs = sorted(entry_value_mapping.items())
+        for batch in chunks(sorted_pairs, self.chunk_size):
+            case_blocks = " ".join(f"WHEN {entry} THEN {value}" for entry, value in batch)
+            in_values = ", ".join(str(entry) for entry, _ in batch)
+            statement = (
+                f"UPDATE {quote_ident(table_name)} "
+                f"SET {quote_ident(target_column)} = CASE {quote_ident(key_column)} "
+                f"{case_blocks} ELSE {quote_ident(target_column)} END "
+                f"WHERE {quote_ident(key_column)} IN ({in_values});"
+            )
+            updates.append(statement)
+        return updates
+
     def _row_shuffle_statements(
         self,
         table_name: str,
@@ -526,6 +550,133 @@ class WorldRandomizer:
             f"Weapons: shuffled stats for {len(mapping)} rows across {len(fields)} fields."
         )
 
+    def randomize_item_stat_rolls(
+        self,
+        plan: RandomizationPlan,
+        min_multiplier: float,
+        max_multiplier: float,
+    ) -> None:
+        table_name = "item_template"
+        columns = self.table_columns(table_name)
+        if not columns:
+            plan.add_summary("Item stat rolls: table `item_template` not found (skipped).")
+            return
+
+        key_column = self._pick_column(columns, ["entry", "Entry", "ID", "id"])
+        if not key_column:
+            plan.add_summary("Item stat rolls: no key column in `item_template` (skipped).")
+            return
+
+        lower_map = {column.lower(): column for column in columns}
+        type_value_pairs: list[tuple[str, str]] = []
+        for type_candidate, value_candidate in zip(ITEM_TYPE_FIELDS, ITEM_VALUE_FIELDS, strict=True):
+            type_column = lower_map.get(type_candidate.lower())
+            value_column = lower_map.get(value_candidate.lower())
+            if type_column and value_column:
+                type_value_pairs.append((type_column, value_column))
+
+        if not type_value_pairs:
+            plan.add_summary("Item stat rolls: stat_type/stat_value fields not found (skipped).")
+            return
+
+        class_column = self._pick_column(columns, ["class", "Class"])
+        inventory_column = self._pick_column(columns, ["InventoryType", "inventorytype"])
+        where_parts: list[str] = []
+        # Scope to equippable gear to avoid quest/misc junk items.
+        if class_column:
+            where_parts.append(f"{quote_ident(class_column)} IN (2, 4)")
+        if inventory_column:
+            where_parts.append(f"{quote_ident(inventory_column)} > 0")
+
+        selected_columns = [key_column]
+        for type_column, value_column in type_value_pairs:
+            selected_columns.extend([type_column, value_column])
+
+        query = (
+            f"SELECT {', '.join(quote_ident(column) for column in selected_columns)} "
+            f"FROM {quote_ident(table_name)}"
+        )
+        if where_parts:
+            query += f" WHERE {' AND '.join(where_parts)}"
+        query += ";"
+
+        rows = self.client.run_query(query)
+        if not rows:
+            plan.add_summary("Item stat rolls: no candidate item rows found (skipped).")
+            return
+
+        updates_by_column: dict[str, dict[int, int]] = {
+            value_column: {} for _, value_column in type_value_pairs
+        }
+        changed_rows = 0
+        changed_stats = 0
+
+        for row in rows:
+            if not row:
+                continue
+            try:
+                entry = int(row[0])
+            except (TypeError, ValueError):
+                continue
+            if entry <= 0:
+                continue
+
+            row_changed = False
+            offset = 1
+            for _, value_column in type_value_pairs:
+                if offset + 1 >= len(row):
+                    break
+                try:
+                    stat_type = int(row[offset])
+                    stat_value = int(row[offset + 1])
+                except (TypeError, ValueError):
+                    offset += 2
+                    continue
+                offset += 2
+
+                if stat_type == 0 or stat_value == 0:
+                    continue
+
+                factor = self.rng.uniform(min_multiplier, max_multiplier)
+                new_value = int(round(stat_value * factor))
+                if stat_value > 0 and new_value < 1:
+                    new_value = 1
+                elif stat_value < 0 and new_value > -1:
+                    new_value = -1
+
+                if new_value == stat_value:
+                    continue
+
+                updates_by_column[value_column][entry] = new_value
+                changed_stats += 1
+                row_changed = True
+
+            if row_changed:
+                changed_rows += 1
+
+        if changed_stats == 0:
+            plan.add_summary("Item stat rolls: no stat values changed (skipped).")
+            return
+
+        for value_column, mapping in updates_by_column.items():
+            if not mapping:
+                continue
+            plan.add_sql_many(
+                self._case_update_by_key_statements(
+                    table_name=table_name,
+                    key_column=key_column,
+                    target_column=value_column,
+                    entry_value_mapping=mapping,
+                )
+            )
+
+        plan.mark_tables([table_name])
+        plan.add_summary(
+            "Item stat rolls: randomized "
+            f"{changed_stats} stat values across {changed_rows} items "
+            f"(x{min_multiplier:.2f}..x{max_multiplier:.2f})."
+        )
+
     def randomize_quests(self, plan: RandomizationPlan) -> None:
         table_name = "quest_template"
         columns = self.table_columns(table_name)
@@ -623,6 +774,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Enable/disable quest randomization.",
     )
+    parser.add_argument(
+        "--item-stat-rolls",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Enable/disable random stat rerolls in item_template stat_value columns "
+            "(for equippable gear)."
+        ),
+    )
+    parser.add_argument(
+        "--item-stat-roll-min",
+        type=float,
+        default=0.5,
+        help="Minimum stat multiplier for --item-stat-rolls (default: 0.5).",
+    )
+    parser.add_argument(
+        "--item-stat-roll-max",
+        type=float,
+        default=2.0,
+        help="Maximum stat multiplier for --item-stat-rolls (default: 2.0).",
+    )
     return parser
 
 
@@ -668,8 +840,12 @@ def run(argv: Sequence[str]) -> int:
     if args.chunk_size < 1:
         parser.error("--chunk-size must be >= 1")
 
-    if not any((args.mobs, args.loot, args.weapons, args.quests)):
+    if not any((args.mobs, args.loot, args.weapons, args.quests, args.item_stat_rolls)):
         parser.error("At least one category must be enabled.")
+    if args.item_stat_roll_min <= 0 or args.item_stat_roll_max <= 0:
+        parser.error("--item-stat-roll-min and --item-stat-roll-max must be > 0")
+    if args.item_stat_roll_min > args.item_stat_roll_max:
+        parser.error("--item-stat-roll-min must be <= --item-stat-roll-max")
 
     seed = resolve_seed(args.seed)
     rng = random.Random(seed)
@@ -694,6 +870,12 @@ def run(argv: Sequence[str]) -> int:
         randomizer.randomize_weapons(plan)
     if args.quests:
         randomizer.randomize_quests(plan)
+    if args.item_stat_rolls:
+        randomizer.randomize_item_stat_rolls(
+            plan,
+            min_multiplier=args.item_stat_roll_min,
+            max_multiplier=args.item_stat_roll_max,
+        )
 
     if not plan.has_changes:
         print("No SQL changes were generated.")
