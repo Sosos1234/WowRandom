@@ -111,6 +111,44 @@ python3 wow_randomizer.py --apply
 - SQL files are saved to `output/randomize_<seed>.sql` by default.
 - Backups are saved to `backup/world_backup_<seed>.sql` when enabled.
 
+## Unidentified item system bootstrap (MVP)
+
+This repository also includes a generator for an "unidentified items" economy.
+
+What it does:
+- creates world/characters support tables for identification and upgrade dust
+- copies equippable items into unknown entries (entry + offset)
+- strips visible stats from unknown copies (`stat_value*`, damage, armor, resists)
+- optionally rewrites loot templates to drop unknown entries
+
+Install dependency:
+
+```bash
+python3 -m pip install mysql-connector-python
+```
+
+Run generator:
+
+```bash
+python3 tools/generate_unknown_items.py \
+  --host 127.0.0.1 \
+  --port 3306 \
+  --user wow \
+  --password "wow123" \
+  --world-db world \
+  --characters-db characters \
+  --unknown-offset 1000000 \
+  --swap-loot
+```
+
+Dry run first:
+
+```bash
+python3 tools/generate_unknown_items.py --dry-run
+```
+
+SQL schema is also available at `sql/identify_system_schema.sql`.
+
 ## Safety checklist
 
 1. Stop world/auth daemons or ensure no active players.
