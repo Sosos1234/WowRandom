@@ -92,8 +92,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force-quality",
         type=int,
-        default=0,
-        help="Set copied unknown item quality to this value (default 0).",
+        default=-1,
+        help=(
+            "Set copied unknown item quality to this value. "
+            "Default -1 keeps original quality."
+        ),
     )
     parser.add_argument(
         "--swap-loot",
@@ -359,7 +362,7 @@ def main() -> int:
             )
             if desc_col:
                 unknown_row[desc_col] = args.unknown_description
-            if quality_col:
+            if quality_col and args.force_quality >= 0:
                 unknown_row[quality_col] = args.force_quality
 
             for field in zero_fields:

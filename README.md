@@ -141,6 +141,10 @@ python3 tools/generate_unknown_items.py \
   --swap-loot
 ```
 
+Notes:
+- By default unknown copies keep original item quality.
+- Use `--force-quality <N>` only if you explicitly want to override quality.
+
 Dry run first:
 
 ```bash
