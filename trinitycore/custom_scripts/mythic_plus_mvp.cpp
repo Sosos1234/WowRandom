@@ -57,6 +57,7 @@ namespace
     constexpr uint32 MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS = 3600; // once per hour
     constexpr uint32 MPLUS_PORTAL_ACTIVE_SECONDS = 3600;         // active for one hour
     constexpr float MPLUS_BASE_KEY_DROP_CHANCE = 1.0f;           // base open-world key chance
+    constexpr float MPLUS_PORTAL_BONUS_RADIUS = 120.0f;          // bonus works only near gate
 
     enum MPlusAffixMask : uint32
     {
@@ -200,6 +201,37 @@ namespace
         uint32 GetActivePortalBonusPct() const { return _activePortal.active ? _activePortal.bonusPct : 0; }
         uint32 GetActivePortalMapId() const { return _activePortal.active ? _activePortal.mapId : 0; }
         char const* GetActivePortalRankName() const { return _activePortal.active ? PortalRankName(_activePortal.rankIndex) : "-"; }
+        float GetPortalBonusRadius() const { return MPLUS_PORTAL_BONUS_RADIUS; }
+
+        float GetDistanceToActivePortal(Player const* player) const
+        {
+            if (!_activePortal.active || !player)
+                return -1.0f;
+
+            if (player->GetMapId() != _activePortal.mapId)
+                return -1.0f;
+
+            return player->GetDistance(
+                _activePortal.pos.GetPositionX(),
+                _activePortal.pos.GetPositionY(),
+                _activePortal.pos.GetPositionZ()
+            );
+        }
+
+        uint32 GetActivePortalBonusPctForPlayer(Player const* player) const
+        {
+            if (!_activePortal.active || !player)
+                return 0;
+
+            if (player->GetMapId() != _activePortal.mapId)
+                return 0;
+
+            float distance = GetDistanceToActivePortal(player);
+            if (distance < 0.0f || distance > MPLUS_PORTAL_BONUS_RADIUS)
+                return 0;
+
+            return _activePortal.bonusPct;
+        }
 
         uint32 GetActivePortalSecondsLeft() const
         {
@@ -335,8 +367,8 @@ namespace
             if (!map || map->IsDungeon() || map->IsRaid())
                 return; // open-world only for this feature
 
-            float chance = MPLUS_BASE_KEY_DROP_CHANCE;
-            chance += float(GetActivePortalBonusPct());
+            uint32 localBonus = GetActivePortalBonusPctForPlayer(killer);
+            float chance = MPLUS_BASE_KEY_DROP_CHANCE + float(localBonus);
             chance = std::min(chance, 95.0f);
 
             if (!roll_chance_f(chance))
@@ -344,9 +376,10 @@ namespace
 
             killer->AddItem(MPLUS_KEYSTONE_ITEM_ENTRY, 1);
             ChatHandler(killer->GetSession()).PSendSysMessage(
-                "Мифик+: выпал Keystone! Шанс был %.1f%% (бонус портала: +%u%%).",
+                "Мифик+: выпал Keystone! Шанс был %.1f%% (бонус рядом с порталом: +%u%%, радиус %.0f м).",
                 chance,
-                GetActivePortalBonusPct()
+                localBonus,
+                MPLUS_PORTAL_BONUS_RADIUS
             );
         }
 
@@ -946,10 +979,19 @@ namespace
                         return true;
                     }
 
+                    uint32 localBonus = MythicPlusMgr::Instance().GetActivePortalBonusPctForPlayer(player);
+                    float distance = MythicPlusMgr::Instance().GetDistanceToActivePortal(player);
+                    char const* mapState = distance < 0.0f ? "другая карта" : "та же карта";
+                    float shownDistance = distance < 0.0f ? 0.0f : distance;
+
                     ChatHandler(player->GetSession()).PSendSysMessage(
-                        "Активные Врата: ранг %s, бонус +%u%%, осталось %u сек, карта %u.",
+                        "Активные Врата: ранг %s, общий бонус %u%%, твой бонус сейчас +%u%% (радиус %.0f м), расстояние %.1f м (%s), осталось %u сек, карта %u.",
                         MythicPlusMgr::Instance().GetActivePortalRankName(),
                         MythicPlusMgr::Instance().GetActivePortalBonusPct(),
+                        localBonus,
+                        MythicPlusMgr::Instance().GetPortalBonusRadius(),
+                        shownDistance,
+                        mapState,
                         MythicPlusMgr::Instance().GetActivePortalSecondsLeft(),
                         MythicPlusMgr::Instance().GetActivePortalMapId()
                     );
