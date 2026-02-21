@@ -36,6 +36,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
+#include "World.h"
 #include "WorldSession.h"
 
 #include <algorithm>
