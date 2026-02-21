@@ -228,9 +228,9 @@ namespace
 
             CharacterDatabase.PExecute(
                 "REPLACE INTO custom_mplus_player_key (guid, dungeon_id, level, affix_mask) "
-                "VALUES ({}, {}, {}, {})",
+                "VALUES (%u, %u, %u, %u)",
                 player->GetGUID().GetCounter(),
-                dungeon->dungeonId,
+                uint32(dungeon->dungeonId),
                 uint32(level),
                 affixMask
             );
@@ -247,9 +247,9 @@ namespace
             uint32 affixMask = GetWeeklyAffixMask();
             CharacterDatabase.PExecute(
                 "REPLACE INTO custom_mplus_player_key (guid, dungeon_id, level, affix_mask) "
-                "VALUES ({}, {}, {}, {})",
+                "VALUES (%u, %u, %u, %u)",
                 player->GetGUID().GetCounter(),
-                dungeonId,
+                uint32(dungeonId),
                 uint32(level),
                 affixMask
             );
@@ -260,7 +260,7 @@ namespace
         {
             QueryResult key = CharacterDatabase.PQuery(
                 "SELECT dungeon_id, level, affix_mask "
-                "FROM custom_mplus_player_key WHERE guid = {}",
+                "FROM custom_mplus_player_key WHERE guid = %u",
                 player->GetGUID().GetCounter()
             );
             if (!key)
@@ -273,37 +273,25 @@ namespace
             return true;
         }
 
-        bool TryStartRunOnMapEnter(Player* player)
+        bool StartRun(Player* player, DungeonDef const* dungeon, uint8 level, uint32 affixMask, bool requireToken)
         {
-            EnsureLoaded();
+            if (!player || !dungeon)
+                return false;
 
             Map* map = player->GetMap();
             if (!map || !map->IsDungeon() || map->IsRaid())
                 return false;
 
             Group* group = player->GetGroup();
-            if (!group)
-                return false;
-
-            if (group->GetLeaderGUID() != player->GetGUID())
+            if (group && group->GetLeaderGUID() != player->GetGUID())
                 return false;
 
             uint32 instanceId = map->GetInstanceId();
             if (GetActiveRun(instanceId))
                 return false; // already running
 
-            if (!player->HasItemCount(MPLUS_KEYSTONE_ITEM_ENTRY, 1, true))
+            if (requireToken && !player->HasItemCount(MPLUS_KEYSTONE_ITEM_ENTRY, 1, true))
                 return false; // no token => no Mythic+
-
-            uint16 dungeonId = 0;
-            uint8 level = 0;
-            uint32 affixMask = 0;
-            if (!GetPlayerKey(player, dungeonId, level, affixMask))
-                return false;
-
-            DungeonDef const* dungeon = GetDungeonById(dungeonId);
-            if (!dungeon || !dungeon->enabled)
-                return false;
 
             if (dungeon->mapId != map->GetId())
             {
@@ -342,6 +330,60 @@ namespace
             }
 
             return true;
+        }
+
+        bool TryStartRunOnMapEnter(Player* player)
+        {
+            EnsureLoaded();
+
+            uint16 dungeonId = 0;
+            uint8 level = 0;
+            uint32 affixMask = 0;
+            if (!GetPlayerKey(player, dungeonId, level, affixMask))
+                return false;
+
+            DungeonDef const* dungeon = GetDungeonById(dungeonId);
+            if (!dungeon || !dungeon->enabled)
+                return false;
+
+            return StartRun(player, dungeon, level, affixMask, /*requireToken=*/true);
+        }
+
+        bool TryStartRunManual(Player* player)
+        {
+            EnsureLoaded();
+
+            Map* map = player ? player->GetMap() : nullptr;
+            if (!map || !map->IsDungeon() || map->IsRaid())
+                return false;
+
+            DungeonDef const* currentDungeon = nullptr;
+            for (DungeonDef const& d : _dungeons)
+            {
+                if (d.enabled && d.mapId == map->GetId())
+                {
+                    currentDungeon = &d;
+                    break;
+                }
+            }
+            if (!currentDungeon)
+                return false;
+
+            uint16 dungeonId = 0;
+            uint8 level = 2;
+            uint32 affixMask = GetWeeklyAffixMask();
+
+            if (GetPlayerKey(player, dungeonId, level, affixMask))
+            {
+                if (dungeonId != currentDungeon->dungeonId)
+                    dungeonId = currentDungeon->dungeonId;
+            }
+            else
+            {
+                SetPlayerKey(player, currentDungeon->dungeonId, level);
+            }
+
+            return StartRun(player, currentDungeon, std::max<uint8>(2, level), affixMask, /*requireToken=*/false);
         }
 
         void OnPlayerKilledByCreature(Player* killed)
@@ -424,10 +466,10 @@ namespace
             CharacterDatabase.PExecute(
                 "INSERT INTO custom_mplus_run_history "
                 "(leader_guid, dungeon_id, map_id, instance_id, level, affix_mask, start_unix, end_unix, duration_ms, deaths, success) "
-                "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                "VALUES (%u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u)",
                 run.leaderGuid,
-                run.dungeonId,
-                run.mapId,
+                uint32(run.dungeonId),
+                uint32(run.mapId),
                 run.instanceId,
                 uint32(run.level),
                 run.affixMask,
@@ -435,7 +477,7 @@ namespace
                 end,
                 durationMs,
                 uint32(run.deaths),
-                success ? 1 : 0
+                success ? 1u : 0u
             );
         }
 
@@ -613,6 +655,7 @@ namespace
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Выдать предмет-ключ (камень)", GOSSIP_SENDER_MAIN, 1);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Сгенерировать новый ключ (рандом)", GOSSIP_SENDER_MAIN, 2);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Выбрать подземелье для ключа", GOSSIP_SENDER_MAIN, 3);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Запустить М+ в текущем инсте (тест/соло)", GOSSIP_SENDER_MAIN, 4);
 
                 SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me);
                 return true;
@@ -667,6 +710,20 @@ namespace
                     }
                     AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Назад", GOSSIP_SENDER_MAIN, 999);
                     SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me);
+                    return true;
+                }
+
+                if (action == 4)
+                {
+                    CloseGossipMenuFor(player);
+                    if (!MythicPlusMgr::Instance().TryStartRunManual(player))
+                    {
+                        ChatHandler(player->GetSession()).SendSysMessage(
+                            "Мифик+: ручной запуск не удался. Нужен 5p инстанс из custom_mplus_dungeon."
+                        );
+                        return true;
+                    }
+                    ChatHandler(player->GetSession()).SendSysMessage("Мифик+: ручной запуск выполнен.");
                     return true;
                 }
 
