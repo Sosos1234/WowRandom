@@ -543,6 +543,68 @@ namespace
             return StartRun(player, currentDungeon, std::max<uint8>(2, level), affixMask, /*requireToken=*/false);
         }
 
+        bool SpawnTestPortalAtPlayer(Player* player)
+        {
+            EnsureLoaded();
+
+            if (!player || !player->IsInWorld())
+                return false;
+
+            Map* playerMap = player->GetMap();
+            if (!playerMap || playerMap->IsDungeon() || playerMap->IsRaid())
+                return false;
+
+            if (_activePortal.active)
+                DespawnActivePortal(/*announce=*/false);
+
+            std::time_t now = std::time(nullptr);
+            Position pos = player->GetPosition();
+            uint16 mapId = uint16(player->GetMapId());
+
+            Map* map = MapManager::instance()->CreateBaseMap(mapId);
+            if (!map)
+                return false;
+
+            map->LoadGrid(pos.GetPositionX(), pos.GetPositionY());
+
+            uint8 rank = uint8(urand(0u, 6u)); // F..S
+            uint32 bonus = uint32((rank + 1) * 10u);
+
+            Creature* gate = map->SummonCreature(
+                MPLUS_WORLD_GATE_ENTRY,
+                pos,
+                nullptr,
+                MPLUS_PORTAL_ACTIVE_SECONDS * 1000u
+            );
+            if (!gate)
+                return false;
+
+            gate->SetImmuneToAll(true);
+
+            _activePortal.active = true;
+            _activePortal.spawnId = 0;
+            _activePortal.mapId = mapId;
+            _activePortal.pos = pos;
+            _activePortal.rankIndex = rank;
+            _activePortal.bonusPct = bonus;
+            _activePortal.expiresUnix = now + MPLUS_PORTAL_ACTIVE_SECONDS;
+            _activePortal.portalGuid = gate->GetGUID();
+
+            SpawnPortalRadiusMarkers(map, _activePortal, MPLUS_PORTAL_ACTIVE_SECONDS * 1000u);
+
+            _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
+            PersistPortalNextSpawn();
+
+            BroadcastPortalMessage(
+                std::string("Созданы ТЕСТОВЫЕ Мировые Врата ранга ") +
+                PortalRankName(rank) +
+                " у игрока " + player->GetName() +
+                "! Бонус: +" + std::to_string(bonus) + "%."
+            );
+
+            return true;
+        }
+
         void OnPlayerKilledByCreature(Player* killed)
         {
             Map* map = killed->GetMap();
@@ -1064,6 +1126,7 @@ namespace
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Выбрать подземелье для ключа", GOSSIP_SENDER_MAIN, 3);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Запустить М+ в текущем инсте (тест/соло)", GOSSIP_SENDER_MAIN, 4);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Статус мировых врат", GOSSIP_SENDER_MAIN, 5);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Создать мировые врата здесь (тест)", GOSSIP_SENDER_MAIN, 6);
 
                 SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me);
                 return true;
@@ -1160,6 +1223,21 @@ namespace
                         MythicPlusMgr::Instance().GetActivePortalSecondsLeft(),
                         MythicPlusMgr::Instance().GetActivePortalMapId()
                     );
+                    return true;
+                }
+
+                if (action == 6)
+                {
+                    CloseGossipMenuFor(player);
+                    if (!MythicPlusMgr::Instance().SpawnTestPortalAtPlayer(player))
+                    {
+                        ChatHandler(player->GetSession()).SendSysMessage(
+                            "Не удалось создать тестовые Врата здесь (нужен открытый мир, не инстанс)."
+                        );
+                        return true;
+                    }
+
+                    ChatHandler(player->GetSession()).SendSysMessage("Тестовые Мировые Врата созданы рядом с тобой.");
                     return true;
                 }
 
