@@ -39,6 +39,7 @@
 #include "WorldSession.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <string>
@@ -50,6 +51,7 @@ namespace
 {
     constexpr uint32 MPLUS_KEYSTONE_ITEM_ENTRY = 900000;
     constexpr uint32 MPLUS_WORLD_GATE_ENTRY = 900002;
+    constexpr uint32 MPLUS_WORLD_GATE_MARKER_ENTRY = 900003;
 
     // Reward (change freely; must exist client-side)
     constexpr uint32 MPLUS_REWARD_ITEM_ENTRY = 47241; // Emblem of Triumph
@@ -58,6 +60,9 @@ namespace
     constexpr uint32 MPLUS_PORTAL_ACTIVE_SECONDS = 3600;         // active for one hour
     constexpr float MPLUS_BASE_KEY_DROP_CHANCE = 1.0f;           // base open-world key chance
     constexpr float MPLUS_PORTAL_BONUS_RADIUS = 120.0f;          // bonus works only near gate
+    constexpr uint8 MPLUS_PORTAL_MARKER_POINTS = 18;             // visual ring quality
+    constexpr float MPLUS_PORTAL_MARKER_SCALE = 0.35f;
+    constexpr float MPLUS_PORTAL_MARKER_Z_OFFSET = 0.15f;
 
     enum MPlusAffixMask : uint32
     {
@@ -109,6 +114,7 @@ namespace
         uint32 bonusPct = 0;
         std::time_t expiresUnix = 0;
         ObjectGuid portalGuid = ObjectGuid::Empty;
+        std::vector<ObjectGuid> markerGuids;
     };
 
     char const* PortalRankName(uint8 rankIndex)
@@ -619,11 +625,18 @@ namespace
 
         void DespawnActivePortal(bool announce)
         {
-            if (_activePortal.active && !_activePortal.portalGuid.IsEmpty())
+            if (_activePortal.active)
             {
                 if (Map* map = MapManager::instance()->CreateBaseMap(_activePortal.mapId))
-                    if (Creature* gate = map->GetCreature(_activePortal.portalGuid))
-                        gate->DespawnOrUnsummon();
+                {
+                    if (!_activePortal.portalGuid.IsEmpty())
+                        if (Creature* gate = map->GetCreature(_activePortal.portalGuid))
+                            gate->DespawnOrUnsummon();
+
+                    for (ObjectGuid const& markerGuid : _activePortal.markerGuids)
+                        if (Creature* marker = map->GetCreature(markerGuid))
+                            marker->DespawnOrUnsummon();
+                }
             }
 
             if (announce && _activePortal.active)
@@ -632,6 +645,39 @@ namespace
             }
 
             _activePortal = ActivePortal{};
+        }
+
+        void SpawnPortalRadiusMarkers(Map* map, ActivePortal& portal) const
+        {
+            if (!map)
+                return;
+
+            portal.markerGuids.clear();
+            float const twoPi = 6.28318530718f;
+
+            for (uint8 i = 0; i < MPLUS_PORTAL_MARKER_POINTS; ++i)
+            {
+                float angle = twoPi * float(i) / float(MPLUS_PORTAL_MARKER_POINTS);
+                Position markerPos;
+                markerPos.Relocate(
+                    portal.pos.GetPositionX() + MPLUS_PORTAL_BONUS_RADIUS * std::cos(angle),
+                    portal.pos.GetPositionY() + MPLUS_PORTAL_BONUS_RADIUS * std::sin(angle),
+                    portal.pos.GetPositionZ() + MPLUS_PORTAL_MARKER_Z_OFFSET,
+                    angle
+                );
+
+                if (Creature* marker = map->SummonCreature(
+                        MPLUS_WORLD_GATE_MARKER_ENTRY,
+                        markerPos,
+                        nullptr,
+                        MPLUS_PORTAL_ACTIVE_SECONDS * 1000u))
+                {
+                    marker->SetObjectScale(MPLUS_PORTAL_MARKER_SCALE);
+                    marker->SetReactState(REACT_PASSIVE);
+                    marker->SetImmuneToAll(true);
+                    portal.markerGuids.push_back(marker->GetGUID());
+                }
+            }
         }
 
         void SpawnRandomPortal(std::time_t now)
@@ -656,6 +702,9 @@ namespace
                     nullptr,
                     MPLUS_PORTAL_ACTIVE_SECONDS * 1000u
                 );
+
+                if (summonedGate)
+                    summonedGate->SetImmuneToAll(true);
             }
 
             _activePortal.active = true;
@@ -667,6 +716,9 @@ namespace
             _activePortal.expiresUnix = now + MPLUS_PORTAL_ACTIVE_SECONDS;
             _activePortal.portalGuid = summonedGate ? summonedGate->GetGUID() : ObjectGuid::Empty;
 
+            if (Map* map = MapManager::instance()->CreateBaseMap(spawn.mapId))
+                SpawnPortalRadiusMarkers(map, _activePortal);
+
             _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
             PersistPortalNextSpawn();
 
@@ -675,7 +727,9 @@ namespace
                 PortalRankName(rank) +
                 "! Бонус к шансу дропа Mythic Keystone: +" +
                 std::to_string(bonus) +
-                "% (до закрытия: " +
+                "% (радиус бонуса " +
+                std::to_string(uint32(MPLUS_PORTAL_BONUS_RADIUS)) +
+                " м отмечен маяками, до закрытия: " +
                 std::to_string(MPLUS_PORTAL_ACTIVE_SECONDS / 60) +
                 " мин)."
             );

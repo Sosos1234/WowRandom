@@ -2,6 +2,8 @@
 -- Creates:
 -- - Keystone token item (entry 900000)
 -- - Keystone Master NPC template (entry 900001) with ScriptName 'npc_mplus_keystone_master'
+-- - Unstable Mythic Gate (entry 900002)
+-- - Mythic Gate Marker (entry 900003) used for radius visualization
 --
 -- Spawning the NPC is intentionally NOT done here (coords differ per server).
 -- You can spawn in-game as GM:
@@ -62,6 +64,25 @@ VALUES (
     900002, 18877,
     'Unstable Mythic Gate',
     'Hourly World Event',
+    83, 83, 2,
+    35, 0,
+    1, 7,
+    ''
+);
+
+-- Marker creature for visual radius ring around world gate
+DELETE FROM creature_template WHERE entry = 900003;
+INSERT INTO creature_template (
+    entry, modelid1, name, subname,
+    minlevel, maxlevel, exp,
+    faction, npcflag,
+    unit_class, type,
+    ScriptName
+)
+VALUES (
+    900003, 9510,
+    'Mythic Gate Marker',
+    'Visual Radius',
     83, 83, 2,
     35, 0,
     1, 7,
