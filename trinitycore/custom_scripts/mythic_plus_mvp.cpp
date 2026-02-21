@@ -319,13 +319,17 @@ namespace
             }
 
             std::time_t now = std::time(nullptr);
+            bool hasPortalState = false;
             QueryResult portalState = WorldDatabase.Query(
                 "SELECT next_spawn_unix FROM custom_mplus_world_portal_state WHERE id = 1"
             );
             if (portalState)
+            {
                 _nextPortalSpawnUnix = portalState->Fetch()[0].GetUInt32();
+                hasPortalState = true;
+            }
             bool resetSpawnTimer = false;
-            if (!_nextPortalSpawnUnix || _nextPortalSpawnUnix < uint32(now))
+            if (!hasPortalState || !_nextPortalSpawnUnix)
             {
                 _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
                 resetSpawnTimer = true;
@@ -694,19 +698,41 @@ namespace
             uint8 rank = uint8(urand(0u, 6u)); // F..S
             uint32 bonus = uint32((rank + 1) * 10u);
 
-            Creature* summonedGate = nullptr;
-            if (Map* map = MapManager::instance()->CreateBaseMap(spawn.mapId))
+            Map* map = MapManager::instance()->CreateBaseMap(spawn.mapId);
+            if (!map)
             {
-                summonedGate = map->SummonCreature(
-                    MPLUS_WORLD_GATE_ENTRY,
-                    spawn.pos,
-                    nullptr,
-                    MPLUS_PORTAL_ACTIVE_SECONDS * 1000u
-                );
-
-                if (summonedGate)
-                    summonedGate->SetImmuneToAll(true);
+                TC_LOG_ERROR("server.loading", "Mythic+ MVP: unable to create base map {} for world gate spawn.", uint32(spawn.mapId));
+                _nextPortalSpawnUnix = uint32(now + 60);
+                PersistPortalNextSpawn();
+                return;
             }
+
+            map->LoadGrid(spawn.pos.GetPositionX(), spawn.pos.GetPositionY());
+
+            Creature* summonedGate = nullptr;
+            summonedGate = map->SummonCreature(
+                MPLUS_WORLD_GATE_ENTRY,
+                spawn.pos,
+                nullptr,
+                MPLUS_PORTAL_ACTIVE_SECONDS * 1000u
+            );
+            if (!summonedGate)
+            {
+                TC_LOG_ERROR(
+                    "server.loading",
+                    "Mythic+ MVP: world gate summon failed (entry {}, map {}, x {}, y {}, z {}). Retrying soon.",
+                    MPLUS_WORLD_GATE_ENTRY,
+                    uint32(spawn.mapId),
+                    spawn.pos.GetPositionX(),
+                    spawn.pos.GetPositionY(),
+                    spawn.pos.GetPositionZ()
+                );
+                _nextPortalSpawnUnix = uint32(now + 60);
+                PersistPortalNextSpawn();
+                return;
+            }
+
+            summonedGate->SetImmuneToAll(true);
 
             _activePortal.active = true;
             _activePortal.spawnId = spawn.spawnId;
@@ -717,8 +743,7 @@ namespace
             _activePortal.expiresUnix = now + MPLUS_PORTAL_ACTIVE_SECONDS;
             _activePortal.portalGuid = summonedGate ? summonedGate->GetGUID() : ObjectGuid::Empty;
 
-            if (Map* map = MapManager::instance()->CreateBaseMap(spawn.mapId))
-                SpawnPortalRadiusMarkers(map, _activePortal);
+            SpawnPortalRadiusMarkers(map, _activePortal);
 
             _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
             PersistPortalNextSpawn();
