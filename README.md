@@ -153,6 +153,16 @@ python3 tools/generate_unknown_items.py --dry-run
 
 SQL schema is also available at `sql/identify_system_schema.sql`.
 
+## Mythic+ keys (MVP)
+
+This repository includes a minimal Mythic+ key system for TrinityCore 3.3.5a (server-side only).
+
+- SQL: `sql/mythic_plus_*`
+- Installer: `python3 tools/install_mythic_plus.py --apply`
+- TrinityCore custom script to compile: `trinitycore/custom_scripts/mythic_plus_mvp.cpp`
+
+See `MYTHIC_PLUS_MVP.md`.
+
 ## Safety checklist
 
 1. Stop world/auth daemons or ensure no active players.
