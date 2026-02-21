@@ -226,7 +226,7 @@ namespace
             uint32 affixMask = GetWeeklyAffixMask();
             uint8 level = 2;
 
-            CharacterDatabase.Execute(
+            CharacterDatabase.PExecute(
                 "REPLACE INTO custom_mplus_player_key (guid, dungeon_id, level, affix_mask) "
                 "VALUES ({}, {}, {}, {})",
                 player->GetGUID().GetCounter(),
@@ -245,7 +245,7 @@ namespace
                 return false;
 
             uint32 affixMask = GetWeeklyAffixMask();
-            CharacterDatabase.Execute(
+            CharacterDatabase.PExecute(
                 "REPLACE INTO custom_mplus_player_key (guid, dungeon_id, level, affix_mask) "
                 "VALUES ({}, {}, {}, {})",
                 player->GetGUID().GetCounter(),
@@ -258,7 +258,7 @@ namespace
 
         bool GetPlayerKey(Player* player, uint16& outDungeonId, uint8& outLevel, uint32& outAffixMask) const
         {
-            QueryResult key = CharacterDatabase.Query(
+            QueryResult key = CharacterDatabase.PQuery(
                 "SELECT dungeon_id, level, affix_mask "
                 "FROM custom_mplus_player_key WHERE guid = {}",
                 player->GetGUID().GetCounter()
@@ -421,7 +421,7 @@ namespace
             uint32 end = endUnix ? uint32(endUnix) : uint32(std::time(nullptr));
             uint32 durationMs = end > start ? (end - start) * 1000u : 0u;
 
-            CharacterDatabase.Execute(
+            CharacterDatabase.PExecute(
                 "INSERT INTO custom_mplus_run_history "
                 "(leader_guid, dungeon_id, map_id, instance_id, level, affix_mask, start_unix, end_unix, duration_ms, deaths, success) "
                 "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
