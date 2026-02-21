@@ -33,6 +33,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
+#include "ObjectAccessor.h"
 #include "Player.h"
 #include "Random.h"
 #include "WorldSession.h"
@@ -465,7 +466,7 @@ namespace
             }
 
             // Upgrade key for leader.
-            if (Player* leader = ObjectAccessor::FindConnectedPlayer(ObjectGuid(HighGuid::Player, run.leaderGuid)))
+            if (Player* leader = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(run.leaderGuid)))
             {
                 uint16 nextDungeonId = run.dungeonId;
                 uint8 nextLevel = run.level;
