@@ -652,7 +652,7 @@ namespace
             _activePortal = ActivePortal{};
         }
 
-        void SpawnPortalRadiusMarkers(Map* map, ActivePortal& portal) const
+        void SpawnPortalRadiusMarkers(Map* map, ActivePortal& portal, uint32 despawnMs) const
         {
             if (!map)
                 return;
@@ -675,13 +675,95 @@ namespace
                         MPLUS_WORLD_GATE_MARKER_ENTRY,
                         markerPos,
                         nullptr,
-                        MPLUS_PORTAL_ACTIVE_SECONDS * 1000u))
+                        despawnMs))
                 {
                     marker->SetObjectScale(MPLUS_PORTAL_MARKER_SCALE);
                     marker->SetReactState(REACT_PASSIVE);
                     marker->SetImmuneToAll(true);
                     portal.markerGuids.push_back(marker->GetGUID());
                 }
+            }
+        }
+
+        bool HasPlayerNearPortal(uint32 mapId, Position const& pos, float radius) const
+        {
+            for (auto const& pair : sWorld->GetAllSessions())
+            {
+                WorldSession* session = pair.second;
+                if (!session)
+                    continue;
+
+                Player* player = session->GetPlayer();
+                if (!player || !player->IsInWorld())
+                    continue;
+
+                if (player->GetMapId() != mapId)
+                    continue;
+
+                if (player->GetDistance(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ()) <= radius)
+                    return true;
+            }
+
+            return false;
+        }
+
+        void EnsureActivePortalVisuals(std::time_t now)
+        {
+            if (!_activePortal.active || _activePortal.expiresUnix <= now)
+                return;
+
+            // Restore visuals only when a player is actually near the gate area.
+            if (!HasPlayerNearPortal(_activePortal.mapId, _activePortal.pos, MPLUS_PORTAL_BONUS_RADIUS * 2.0f))
+                return;
+
+            Map* map = MapManager::instance()->CreateBaseMap(_activePortal.mapId);
+            if (!map)
+                return;
+
+            map->LoadGrid(_activePortal.pos.GetPositionX(), _activePortal.pos.GetPositionY());
+
+            bool gateMissing = _activePortal.portalGuid.IsEmpty() || !map->GetCreature(_activePortal.portalGuid);
+            bool markerMissing = _activePortal.markerGuids.empty();
+            if (!markerMissing)
+            {
+                for (ObjectGuid const& markerGuid : _activePortal.markerGuids)
+                {
+                    if (!map->GetCreature(markerGuid))
+                    {
+                        markerMissing = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!gateMissing && !markerMissing)
+                return;
+
+            std::time_t secondsLeft = _activePortal.expiresUnix - now;
+            if (secondsLeft < 1)
+                secondsLeft = 1;
+            uint32 remainingMs = uint32(secondsLeft) * 1000u;
+
+            if (gateMissing)
+            {
+                if (Creature* gate = map->SummonCreature(
+                        MPLUS_WORLD_GATE_ENTRY,
+                        _activePortal.pos,
+                        nullptr,
+                        remainingMs))
+                {
+                    gate->SetImmuneToAll(true);
+                    _activePortal.portalGuid = gate->GetGUID();
+                }
+            }
+
+            if (markerMissing)
+            {
+                for (ObjectGuid const& markerGuid : _activePortal.markerGuids)
+                    if (Creature* marker = map->GetCreature(markerGuid))
+                        marker->DespawnOrUnsummon();
+
+                SpawnPortalRadiusMarkers(map, _activePortal, remainingMs);
             }
         }
 
@@ -743,7 +825,7 @@ namespace
             _activePortal.expiresUnix = now + MPLUS_PORTAL_ACTIVE_SECONDS;
             _activePortal.portalGuid = summonedGate ? summonedGate->GetGUID() : ObjectGuid::Empty;
 
-            SpawnPortalRadiusMarkers(map, _activePortal);
+            SpawnPortalRadiusMarkers(map, _activePortal, MPLUS_PORTAL_ACTIVE_SECONDS * 1000u);
 
             _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
             PersistPortalNextSpawn();
@@ -770,6 +852,9 @@ namespace
 
             if (!_activePortal.active && _nextPortalSpawnUnix && now >= std::time_t(_nextPortalSpawnUnix))
                 SpawnRandomPortal(now);
+
+            if (_activePortal.active)
+                EnsureActivePortalVisuals(now);
         }
 
         void PersistRunHistory(ActiveRun const& run, bool success, std::time_t endUnix) const
