@@ -356,7 +356,7 @@ namespace
 
             CharacterDatabase.PExecute(
                 "REPLACE INTO custom_mplus_player_key (guid, dungeon_id, level, affix_mask) "
-                "VALUES (%u, %u, %u, %u)",
+                "VALUES ({}, {}, {}, {})",
                 player->GetGUID().GetCounter(),
                 uint32(dungeon->dungeonId),
                 uint32(level),
@@ -400,7 +400,7 @@ namespace
             uint32 affixMask = GetWeeklyAffixMask();
             CharacterDatabase.PExecute(
                 "REPLACE INTO custom_mplus_player_key (guid, dungeon_id, level, affix_mask) "
-                "VALUES (%u, %u, %u, %u)",
+                "VALUES ({}, {}, {}, {})",
                 player->GetGUID().GetCounter(),
                 uint32(dungeonId),
                 uint32(level),
@@ -413,7 +413,7 @@ namespace
         {
             QueryResult key = CharacterDatabase.PQuery(
                 "SELECT dungeon_id, level, affix_mask "
-                "FROM custom_mplus_player_key WHERE guid = %u",
+                "FROM custom_mplus_player_key WHERE guid = {}",
                 player->GetGUID().GetCounter()
             );
             if (!key)
@@ -610,7 +610,7 @@ namespace
         void PersistPortalNextSpawn() const
         {
             WorldDatabase.PExecute(
-                "REPLACE INTO custom_mplus_world_portal_state (id, next_spawn_unix) VALUES (1, %u)",
+                "REPLACE INTO custom_mplus_world_portal_state (id, next_spawn_unix) VALUES (1, {})",
                 _nextPortalSpawnUnix
             );
         }
@@ -759,7 +759,7 @@ namespace
             CharacterDatabase.PExecute(
                 "INSERT INTO custom_mplus_run_history "
                 "(leader_guid, dungeon_id, map_id, instance_id, level, affix_mask, start_unix, end_unix, duration_ms, deaths, success) "
-                "VALUES (%u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u)",
+                "VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                 run.leaderGuid,
                 uint32(run.dungeonId),
                 uint32(run.mapId),
