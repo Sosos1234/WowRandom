@@ -49,10 +49,14 @@
 namespace
 {
     constexpr uint32 MPLUS_KEYSTONE_ITEM_ENTRY = 900000;
-    constexpr uint32 MPLUS_KEYSTONE_MASTER_ENTRY = 900001;
+    constexpr uint32 MPLUS_WORLD_GATE_ENTRY = 900002;
 
     // Reward (change freely; must exist client-side)
     constexpr uint32 MPLUS_REWARD_ITEM_ENTRY = 47241; // Emblem of Triumph
+
+    constexpr uint32 MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS = 3600; // once per hour
+    constexpr uint32 MPLUS_PORTAL_ACTIVE_SECONDS = 3600;         // active for one hour
+    constexpr float MPLUS_BASE_KEY_DROP_CHANCE = 1.0f;           // base open-world key chance
 
     enum MPlusAffixMask : uint32
     {
@@ -86,6 +90,34 @@ namespace
         bool completed = false;
     };
 
+    struct PortalSpawnDef
+    {
+        uint32 spawnId = 0;
+        uint16 mapId = 0;
+        Position pos;
+        std::string name;
+    };
+
+    struct ActivePortal
+    {
+        bool active = false;
+        uint32 spawnId = 0;
+        uint16 mapId = 0;
+        Position pos;
+        uint8 rankIndex = 0; // 0..6 = F..S
+        uint32 bonusPct = 0;
+        std::time_t expiresUnix = 0;
+        ObjectGuid portalGuid = ObjectGuid::Empty;
+    };
+
+    char const* PortalRankName(uint8 rankIndex)
+    {
+        static char const* kNames[] = {"F", "E", "D", "C", "B", "A", "S"};
+        if (rankIndex >= 7)
+            return "F";
+        return kNames[rankIndex];
+    }
+
     class MythicPlusMgr
     {
     public:
@@ -108,6 +140,8 @@ namespace
             if (_cleanupTimer < 10'000)
                 return;
             _cleanupTimer = 0;
+
+            HandleWorldPortalTick();
 
             if (_activeRuns.empty())
                 return;
@@ -162,6 +196,20 @@ namespace
         }
 
         uint32 GetWeeklyAffixMask() const { return _weeklyAffixMask; }
+        bool HasActivePortal() const { return _activePortal.active; }
+        uint32 GetActivePortalBonusPct() const { return _activePortal.active ? _activePortal.bonusPct : 0; }
+        uint32 GetActivePortalMapId() const { return _activePortal.active ? _activePortal.mapId : 0; }
+        char const* GetActivePortalRankName() const { return _activePortal.active ? PortalRankName(_activePortal.rankIndex) : "-"; }
+
+        uint32 GetActivePortalSecondsLeft() const
+        {
+            if (!_activePortal.active)
+                return 0;
+            std::time_t now = std::time(nullptr);
+            if (_activePortal.expiresUnix <= now)
+                return 0;
+            return uint32(_activePortal.expiresUnix - now);
+        }
 
         ActiveRun const* GetActiveRun(uint32 instanceId) const
         {
@@ -183,6 +231,7 @@ namespace
         {
             _dungeons.clear();
             _weeklyAffixMask = 0;
+            _portalSpawns.clear();
 
             QueryResult dungeons = WorldDatabase.Query(
                 "SELECT dungeon_id, name, map_id, final_boss_entry, enabled "
@@ -211,9 +260,49 @@ namespace
             if (weekly)
                 _weeklyAffixMask = weekly->Fetch()[0].GetUInt32();
 
+            QueryResult portalSpawns = WorldDatabase.Query(
+                "SELECT spawn_id, name, map_id, position_x, position_y, position_z, orientation "
+                "FROM custom_mplus_world_portal_spawn WHERE enabled = 1"
+            );
+            if (portalSpawns)
+            {
+                do
+                {
+                    Field* fields = portalSpawns->Fetch();
+                    PortalSpawnDef s;
+                    s.spawnId = fields[0].GetUInt32();
+                    s.name = fields[1].GetString();
+                    s.mapId = fields[2].GetUInt16();
+                    s.pos.Relocate(fields[3].GetFloat(), fields[4].GetFloat(), fields[5].GetFloat(), fields[6].GetFloat());
+                    _portalSpawns.push_back(std::move(s));
+                }
+                while (portalSpawns->NextRow());
+            }
+
+            std::time_t now = std::time(nullptr);
+            QueryResult portalState = WorldDatabase.Query(
+                "SELECT next_spawn_unix FROM custom_mplus_world_portal_state WHERE id = 1"
+            );
+            if (portalState)
+                _nextPortalSpawnUnix = portalState->Fetch()[0].GetUInt32();
+            bool resetSpawnTimer = false;
+            if (!_nextPortalSpawnUnix || _nextPortalSpawnUnix < uint32(now))
+            {
+                _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
+                resetSpawnTimer = true;
+            }
+            if (resetSpawnTimer)
+                PersistPortalNextSpawn();
+
             _loaded = true;
 
-            TC_LOG_INFO("server.loading", "Mythic+ MVP: loaded {} dungeons, weekly affix mask={}.", uint32(_dungeons.size()), _weeklyAffixMask);
+            TC_LOG_INFO(
+                "server.loading",
+                "Mythic+ MVP: loaded {} dungeons, {} portal spawns, weekly affix mask={}.",
+                uint32(_dungeons.size()),
+                uint32(_portalSpawns.size()),
+                _weeklyAffixMask
+            );
         }
 
         bool AssignRandomKeyToPlayer(Player* player)
@@ -235,6 +324,30 @@ namespace
                 affixMask
             );
             return true;
+        }
+
+        void TryRollWorldKeystoneDrop(Player* killer, Creature* killed)
+        {
+            if (!killer || !killed)
+                return;
+
+            Map* map = killer->GetMap();
+            if (!map || map->IsDungeon() || map->IsRaid())
+                return; // open-world only for this feature
+
+            float chance = MPLUS_BASE_KEY_DROP_CHANCE;
+            chance += float(GetActivePortalBonusPct());
+            chance = std::min(chance, 95.0f);
+
+            if (!roll_chance_f(chance))
+                return;
+
+            killer->AddItem(MPLUS_KEYSTONE_ITEM_ENTRY, 1);
+            ChatHandler(killer->GetSession()).PSendSysMessage(
+                "Мифик+: выпал Keystone! Шанс был %.1f%% (бонус портала: +%u%%).",
+                chance,
+                GetActivePortalBonusPct()
+            );
         }
 
         bool SetPlayerKey(Player* player, uint16 dungeonId, uint8 level)
@@ -454,6 +567,98 @@ namespace
     private:
         MythicPlusMgr() = default;
 
+        void PersistPortalNextSpawn() const
+        {
+            WorldDatabase.PExecute(
+                "REPLACE INTO custom_mplus_world_portal_state (id, next_spawn_unix) VALUES (1, %u)",
+                _nextPortalSpawnUnix
+            );
+        }
+
+        void BroadcastPortalMessage(std::string const& message) const
+        {
+            for (auto const& pair : sWorld->GetAllSessions())
+            {
+                if (WorldSession* session = pair.second)
+                    ChatHandler(session).SendSysMessage(message.c_str());
+            }
+        }
+
+        void DespawnActivePortal(bool announce)
+        {
+            if (_activePortal.active && !_activePortal.portalGuid.IsEmpty())
+            {
+                if (Map* map = MapManager::instance()->CreateBaseMap(_activePortal.mapId))
+                    if (Creature* gate = map->GetCreature(_activePortal.portalGuid))
+                        gate->DespawnOrUnsummon();
+            }
+
+            if (announce && _activePortal.active)
+            {
+                BroadcastPortalMessage(std::string("Мировые Врата ") + PortalRankName(_activePortal.rankIndex) + " закрылись.");
+            }
+
+            _activePortal = ActivePortal{};
+        }
+
+        void SpawnRandomPortal(std::time_t now)
+        {
+            if (_portalSpawns.empty())
+            {
+                _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
+                PersistPortalNextSpawn();
+                return;
+            }
+
+            PortalSpawnDef const& spawn = _portalSpawns[urand(0u, uint32(_portalSpawns.size() - 1))];
+            uint8 rank = uint8(urand(0u, 6u)); // F..S
+            uint32 bonus = uint32((rank + 1) * 10u);
+
+            Creature* summonedGate = nullptr;
+            if (Map* map = MapManager::instance()->CreateBaseMap(spawn.mapId))
+            {
+                summonedGate = map->SummonCreature(
+                    MPLUS_WORLD_GATE_ENTRY,
+                    spawn.pos,
+                    nullptr,
+                    MPLUS_PORTAL_ACTIVE_SECONDS * 1000u
+                );
+            }
+
+            _activePortal.active = true;
+            _activePortal.spawnId = spawn.spawnId;
+            _activePortal.mapId = spawn.mapId;
+            _activePortal.pos = spawn.pos;
+            _activePortal.rankIndex = rank;
+            _activePortal.bonusPct = bonus;
+            _activePortal.expiresUnix = now + MPLUS_PORTAL_ACTIVE_SECONDS;
+            _activePortal.portalGuid = summonedGate ? summonedGate->GetGUID() : ObjectGuid::Empty;
+
+            _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
+            PersistPortalNextSpawn();
+
+            BroadcastPortalMessage(
+                std::string("Открылись Мировые Врата ранга ") +
+                PortalRankName(rank) +
+                "! Бонус к шансу дропа Mythic Keystone: +" +
+                std::to_string(bonus) +
+                "% (до закрытия: " +
+                std::to_string(MPLUS_PORTAL_ACTIVE_SECONDS / 60) +
+                " мин)."
+            );
+        }
+
+        void HandleWorldPortalTick()
+        {
+            std::time_t now = std::time(nullptr);
+
+            if (_activePortal.active && _activePortal.expiresUnix <= now)
+                DespawnActivePortal(/*announce=*/true);
+
+            if (!_activePortal.active && _nextPortalSpawnUnix && now >= std::time_t(_nextPortalSpawnUnix))
+                SpawnRandomPortal(now);
+        }
+
         void PersistRunHistory(ActiveRun const& run, bool success, std::time_t endUnix) const
         {
             if (!run.startUnix)
@@ -528,6 +733,9 @@ namespace
 
         std::vector<DungeonDef> _dungeons;
         uint32 _weeklyAffixMask = 0;
+        std::vector<PortalSpawnDef> _portalSpawns;
+        ActivePortal _activePortal;
+        uint32 _nextPortalSpawnUnix = 0;
 
         std::unordered_map<uint32, ActiveRun> _activeRuns;
 
@@ -564,6 +772,7 @@ namespace
         void OnCreatureKill(Player* killer, Creature* killed) override
         {
             MythicPlusMgr::Instance().OnCreatureKilledByPlayer(killer, killed);
+            MythicPlusMgr::Instance().TryRollWorldKeystoneDrop(killer, killed);
         }
 
         void OnPlayerKilledByCreature(Creature* /*killer*/, Player* killed) override
@@ -656,6 +865,7 @@ namespace
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Сгенерировать новый ключ (рандом)", GOSSIP_SENDER_MAIN, 2);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Выбрать подземелье для ключа", GOSSIP_SENDER_MAIN, 3);
                 AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Запустить М+ в текущем инсте (тест/соло)", GOSSIP_SENDER_MAIN, 4);
+                AddGossipItemFor(player, GOSSIP_ICON_CHAT, "Статус мировых врат", GOSSIP_SENDER_MAIN, 5);
 
                 SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me);
                 return true;
@@ -724,6 +934,25 @@ namespace
                         return true;
                     }
                     ChatHandler(player->GetSession()).SendSysMessage("Мифик+: ручной запуск выполнен.");
+                    return true;
+                }
+
+                if (action == 5)
+                {
+                    CloseGossipMenuFor(player);
+                    if (!MythicPlusMgr::Instance().HasActivePortal())
+                    {
+                        ChatHandler(player->GetSession()).SendSysMessage("Мировые Врата сейчас закрыты.");
+                        return true;
+                    }
+
+                    ChatHandler(player->GetSession()).PSendSysMessage(
+                        "Активные Врата: ранг %s, бонус +%u%%, осталось %u сек, карта %u.",
+                        MythicPlusMgr::Instance().GetActivePortalRankName(),
+                        MythicPlusMgr::Instance().GetActivePortalBonusPct(),
+                        MythicPlusMgr::Instance().GetActivePortalSecondsLeft(),
+                        MythicPlusMgr::Instance().GetActivePortalMapId()
+                    );
                     return true;
                 }
 

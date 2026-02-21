@@ -49,3 +49,22 @@ VALUES (
     'npc_mplus_keystone_master'
 );
 
+-- World Gate creature (hourly random open-world portal event)
+DELETE FROM creature_template WHERE entry = 900002;
+INSERT INTO creature_template (
+    entry, modelid1, name, subname,
+    minlevel, maxlevel, exp,
+    faction, npcflag,
+    unit_class, type,
+    ScriptName
+)
+VALUES (
+    900002, 18877,
+    'Unstable Mythic Gate',
+    'Hourly World Event',
+    83, 83, 2,
+    35, 0,
+    1, 7,
+    ''
+);
+

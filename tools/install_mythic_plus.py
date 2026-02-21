@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Seed a default WotLK 5p dungeon list into WORLD DB.",
     )
+    parser.add_argument(
+        "--seed-world-portals",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Seed default open-world hourly portal spawn points.",
+    )
 
     return parser.parse_args()
 
@@ -113,9 +119,14 @@ def main() -> int:
     world_schema = sql_dir / "mythic_plus_world_schema.sql"
     chars_schema = sql_dir / "mythic_plus_characters_schema.sql"
     seed_wotlk = sql_dir / "mythic_plus_seed_wotlk_dungeons.sql"
+    seed_world_portals = sql_dir / "mythic_plus_world_portal_spawn_seed.sql"
     world_content = sql_dir / "mythic_plus_world_content.sql"
 
-    missing = [p for p in [world_schema, chars_schema, seed_wotlk, world_content] if not p.exists()]
+    missing = [
+        p
+        for p in [world_schema, chars_schema, seed_wotlk, seed_world_portals, world_content]
+        if not p.exists()
+    ]
     if missing:
         raise RuntimeError(f"Missing SQL files: {', '.join(str(p) for p in missing)}")
 
@@ -125,6 +136,9 @@ def main() -> int:
 
     if args.seed_wotlk_dungeons:
         plan.append((args.world_db, read_sql(seed_wotlk)))
+
+    if args.seed_world_portals:
+        plan.append((args.world_db, read_sql(seed_world_portals)))
 
     if args.install_content:
         plan.append((args.world_db, read_sql(world_content)))

@@ -160,6 +160,7 @@ This repository includes a minimal Mythic+ key system for TrinityCore 3.3.5a (se
 - SQL: `sql/mythic_plus_*`
 - Installer: `python3 tools/install_mythic_plus.py --apply`
 - TrinityCore custom script to compile: `trinitycore/custom_scripts/mythic_plus_mvp.cpp`
+- Includes hourly open-world gates (F..S) with Mythic key drop bonus (+10% per rank)
 
 See `MYTHIC_PLUS_MVP.md`.
 

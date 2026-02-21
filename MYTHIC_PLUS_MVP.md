@@ -3,9 +3,11 @@
 Этот репозиторий содержит **минимально рабочую** реализацию Мифик+ ключей без клиент‑патча:
 
 - **НПЦ “Keystone Master”** (template entry `900001`) выдаёт/меняет ключ игроку
+- **Мировые Врата** (template entry `900002`) спавнятся раз в час в случайной точке
 - **Ключ хранится в БД characters** (`custom_mplus_player_key`)
 - **История забегов** хранится в БД characters (`custom_mplus_run_history`)
 - **Список подземелий** хранится в БД world (`custom_mplus_dungeon`)
+- **Точки спавна Врат** хранятся в БД world (`custom_mplus_world_portal_spawn`)
 - **Скейл** делается без правок ядра через `UnitScript` (меняем урон):
   - урон игрок→моб уменьшается (эффективно увеличивает HP мобов)
   - урон моб→игрок увеличивается
@@ -31,6 +33,7 @@ python3 tools/install_mythic_plus.py \
 - `sql/mythic_plus_world_schema.sql`
 - `sql/mythic_plus_characters_schema.sql`
 - `sql/mythic_plus_seed_wotlk_dungeons.sql` (можно отключить `--no-seed-wotlk-dungeons`)
+- `sql/mythic_plus_world_portal_spawn_seed.sql` (можно отключить `--no-seed-world-portals`)
 - `sql/mythic_plus_world_content.sql` (предмет/НПЦ, можно отключить `--no-install-content`)
 
 ### Подключение C++ скрипта в TrinityCore
@@ -81,6 +84,20 @@ AddSC_custom_mythic_plus_mvp();
 - выдаётся награда (по умолчанию `47241` * N)
 - ключ лидера повышается на +1 (кап 25) и рандомит подземелье
 
+### Мировые Врата (F..S)
+
+- Раз в час появляется случайный портал (`Unstable Mythic Gate`, entry `900002`)
+- Портал получает случайный ранг опасности: `F, E, D, C, B, A, S`
+- За каждый ранг даётся бонус к дропу Mythic Keystone:
+  - `F = +10%`
+  - `E = +20%`
+  - `D = +30%`
+  - `C = +40%`
+  - `B = +50%`
+  - `A = +60%`
+  - `S = +70%`
+- Бонус применяется глобально пока портал активен (1 час до следующего спавна)
+
 ### Аффиксы (MVP)
 
 Сейчас это просто **битовая маска** `custom_mplus_weekly.affix_mask`:
@@ -98,6 +115,7 @@ AddSC_custom_mythic_plus_mvp();
 
 - SQL предмета/НПЦ: `sql/mythic_plus_world_content.sql`
 - Список данжей: `sql/mythic_plus_seed_wotlk_dungeons.sql`
+- Точки спавна врат: `sql/mythic_plus_world_portal_spawn_seed.sql`
 - Награда/формулы скейла: `trinitycore/custom_scripts/mythic_plus_mvp.cpp`
 
 ### Ограничения MVP
