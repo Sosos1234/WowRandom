@@ -123,14 +123,16 @@ namespace
         std::vector<ObjectGuid> markerGuids;
         std::vector<ObjectGuid> waveCreatureGuids;
         uint32 lastWaveSpawnMs = 0;
+        bool eventStarted = false;  // true when player entered radius and waves began
     };
 
     // Wave spawn: creature entries (must exist in creature_template; 0=end)
-    constexpr uint32 MPLUS_WAVE_CREATURE_ENTRIES[] = { 2560, 2561, 0 }; // Wolf, Timber Wolf (Durotar)
-    constexpr uint32 MPLUS_WAVE_INTERVAL_MS = 60000;   // 60 sec between waves
-    constexpr float MPLUS_WAVE_SPAWN_RADIUS = 25.0f;   // spawn within 25m of portal
-    constexpr uint8 MPLUS_WAVE_MIN_COUNT = 2;
-    constexpr uint8 MPLUS_WAVE_MAX_COUNT = 5;
+    constexpr uint32 MPLUS_WAVE_CREATURE_ENTRIES[] = { 2560, 2561, 2562, 113, 112, 0 }; // Wolf, Timber Wolf, etc
+    constexpr uint32 MPLUS_WAVE_INTERVAL_MS = 20000;   // 20 sec between waves
+    constexpr float MPLUS_WAVE_SPAWN_RADIUS = 30.0f;   // spawn within 30m of portal
+    constexpr float MPLUS_EVENT_TRIGGER_RADIUS = 80.0f; // event starts when player enters this radius
+    constexpr uint8 MPLUS_WAVE_MIN_COUNT = 3;
+    constexpr uint8 MPLUS_WAVE_MAX_COUNT = 6;
 
     char const* PortalRankName(uint8 rankIndex)
     {
@@ -223,6 +225,8 @@ namespace
         uint32 GetActivePortalMapId() const { return _activePortal.active ? _activePortal.mapId : 0; }
         char const* GetActivePortalRankName() const { return _activePortal.active ? PortalRankName(_activePortal.rankIndex) : "-"; }
         float GetPortalBonusRadius() const { return MPLUS_PORTAL_BONUS_RADIUS; }
+        float GetEventTriggerRadius() const { return MPLUS_EVENT_TRIGGER_RADIUS; }
+        bool IsPortalEventStarted() const { return _activePortal.active && _activePortal.eventStarted; }
 
         float GetDistanceToActivePortal(Player const* player) const
         {
@@ -607,6 +611,10 @@ namespace
 
             SpawnPortalRadiusMarkers(map, _activePortal, MPLUS_PORTAL_ACTIVE_SECONDS * 1000u);
 
+            _activePortal.eventStarted = true;
+            SpawnWaveCreatures(now);
+            ChatHandler(player->GetSession()).SendSysMessage("Ивент с волнами мобов начался! Волны каждые 20 сек.");
+
             _nextPortalSpawnUnix = uint32(now + MPLUS_PORTAL_SPAWN_INTERVAL_SECONDS);
             PersistPortalNextSpawn();
 
@@ -743,14 +751,11 @@ namespace
 
         void SpawnWaveCreatures(std::time_t now)
         {
-            if (!_activePortal.active || _activePortal.expiresUnix <= now)
+            if (!_activePortal.active || _activePortal.expiresUnix <= now || !_activePortal.eventStarted)
                 return;
 
             Map* map = MapManager::instance()->CreateBaseMap(_activePortal.mapId);
             if (!map)
-                return;
-
-            if (!HasPlayerNearPortal(_activePortal.mapId, _activePortal.pos, MPLUS_PORTAL_BONUS_RADIUS * 2.0f))
                 return;
 
             map->LoadGrid(_activePortal.pos.GetPositionX(), _activePortal.pos.GetPositionY());
@@ -1000,11 +1005,22 @@ namespace
             if (_activePortal.active)
             {
                 EnsureActivePortalVisuals(now);
-                _activePortal.lastWaveSpawnMs += diff;
-                if (_activePortal.lastWaveSpawnMs >= MPLUS_WAVE_INTERVAL_MS)
+
+                if (!_activePortal.eventStarted && HasPlayerNearPortal(_activePortal.mapId, _activePortal.pos, MPLUS_EVENT_TRIGGER_RADIUS))
                 {
-                    _activePortal.lastWaveSpawnMs = 0;
+                    _activePortal.eventStarted = true;
                     SpawnWaveCreatures(now);
+                    BroadcastPortalMessage("Игрок вошёл в зону Врат! Ивент с волнами мобов начался (волны каждые 20 сек).");
+                }
+
+                if (_activePortal.eventStarted)
+                {
+                    _activePortal.lastWaveSpawnMs += diff;
+                    if (_activePortal.lastWaveSpawnMs >= MPLUS_WAVE_INTERVAL_MS)
+                    {
+                        _activePortal.lastWaveSpawnMs = 0;
+                        SpawnWaveCreatures(now);
+                    }
                 }
             }
         }
@@ -1302,14 +1318,16 @@ namespace
                     char const* mapState = distance < 0.0f ? "другая карта" : "та же карта";
                     float shownDistance = distance < 0.0f ? 0.0f : distance;
 
+                    char const* eventState = MythicPlusMgr::Instance().IsPortalEventStarted() ? "ивент идёт" : "зайди в радиус 80м для старта";
                     ChatHandler(player->GetSession()).PSendSysMessage(
-                        "Активные Врата: ранг %s, общий бонус %u%%, твой бонус сейчас +%u%% (радиус %.0f м), расстояние %.1f м (%s), осталось %u сек, карта %u.",
+                        "Активные Врата: ранг %s, бонус %u%%, твой +%u%% (радиус %.0f м), расстояние %.1f м (%s), %s, осталось %u сек, карта %u.",
                         MythicPlusMgr::Instance().GetActivePortalRankName(),
                         MythicPlusMgr::Instance().GetActivePortalBonusPct(),
                         localBonus,
                         MythicPlusMgr::Instance().GetPortalBonusRadius(),
                         shownDistance,
                         mapState,
+                        eventState,
                         MythicPlusMgr::Instance().GetActivePortalSecondsLeft(),
                         MythicPlusMgr::Instance().GetActivePortalMapId()
                     );
